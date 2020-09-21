@@ -1,0 +1,86 @@
+.el-button {
+  width: 100%;
+  margin-top: 10px;
+}
+.el-message-box__btns .el-button{
+  width: initial;
+  margin-right: 5px;
+}
+
+.el-select {
+  width: 100%;
+}
+
+.el-table {
+  .el-button {
+    margin-top: 0;
+    width: auto;
+  }
+}
+
+.el-date-editor.el-input, .el-autocomplete {
+  width: 100%;
+}
+
+.input-with-select {
+  .el-input-group__append {
+    width: auto;
+  }
+}
+
+.el-message-box__btns button:nth-child(2) {
+  margin-left: 0;
+}
+
+.el-menu {
+  border: none;
+  background-color: $color-main;
+
+  .el-menu-item {
+    color: $color-white;
+
+    &:hover, &:focus, &.is-active {
+      color: $color-main;
+      outline: none;
+      background-color: rgb(243, 244, 246);
+
+      i {
+        color: $color-main;
+      }
+    }
+
+    i {
+      color: $color-white;
+    }
+  }
+}
+
+.el-button + .el-button {
+  margin-left: inherit;
+}
+
+.el-button--text {
+  color: $color-text;
+  text-decoration: underline;
+}
+
+.el-container {
+  overflow: auto;
+}
+
+.el-collapse-item__header {
+  background-color: $color-grey;
+  padding-left: 10px;
+  font-weight: bold;
+  border-bottom: thin solid $color-border;
+}
+
+.el-row.filters {
+  .el-form-item {
+    margin-bottom: 0;
+  }
+}
+
+.el-collapse-item__content {
+  padding: 10px;
+}

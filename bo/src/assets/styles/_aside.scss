@@ -1,0 +1,11 @@
+.el-aside {
+  background-color: $color-main;
+  flex: 0 0 auto;
+  width: $aside-width !important;
+
+  .aside-header {
+    padding: 10px 45px;
+    margin-bottom: 30px;
+  }
+}
+

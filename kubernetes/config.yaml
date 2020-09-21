@@ -1,0 +1,429 @@
+---
+apiVersion: "apps/v1"
+kind: Ingress
+metadata:
+  name: ingress
+  annotations:
+    ingress.kubernetes.io/ssl-redirect: "false"
+    certmanager.io/cluster-issuer: letsencrypt-prod # cert manager 0.12
+    certmanager.k8s.io/cluster-issuer: letsencrypt-prod # cert manager 0.8
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  tls:
+    - hosts:
+      - api.#ENVIRONMENT#.ca.test.thecodingmachine.com
+      secretName: tls-certificate-api
+    - hosts:
+      - echo.#ENVIRONMENT#.ca.test.thecodingmachine.com
+      secretName: tls-certificate-echo
+    - hosts:
+      - #ENVIRONMENT#.ca.test.thecodingmachine.com
+      secretName: tls-certificate-bo
+  rules:
+  - host: phpmyadmin.#ENVIRONMENT#.ca.test.thecodingmachine.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: phpmyadmin
+          servicePort: 80
+  - host: api.#ENVIRONMENT#.ca.test.thecodingmachine.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: api
+          servicePort: 80
+  - host: echo.#ENVIRONMENT#.ca.test.thecodingmachine.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: echo
+          servicePort: 80
+  - host: #ENVIRONMENT#.ca.test.thecodingmachine.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: bo
+          servicePort: 80
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "mysql"
+  labels:
+    app: "mysql"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "mysql"
+  template:
+    metadata:
+      labels:
+        app: "mysql"
+    spec:
+      containers:
+      - name: "mysql"
+        image: "mysql:5.7"
+        imagePullPolicy: Always
+        envFrom:
+        - secretRef:
+            name: db-secrets
+            optional: false
+        args:
+        - --ignore-db-dir=lost+found
+        - --max_allowed_packet=512M
+        volumeMounts:
+          - mountPath: /var/lib/mysql
+            name: mysql-data
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "mysql"
+spec:
+  selector:
+    app: "mysql"
+  ports:
+  - name: mysql
+    port: 3306
+    targetPort: 3306
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "redis"
+  labels:
+    app: "redis"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "redis"
+  template:
+    metadata:
+      labels:
+        app: "redis"
+    spec:
+      containers:
+        - name: "redis"
+          image: "redis:4.0.5-alpine"
+          imagePullPolicy: Always
+          args:
+            - "redis-server"
+            - "--appendonly"
+            - "yes"
+          volumeMounts:
+            - mountPath: /data
+              name: redis-data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "redis"
+spec:
+  selector:
+    app: "redis"
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: v1
+stringData:
+  MYSQL_ROOT_PASSWORD: foo
+  MYSQL_DATABASE: api
+  MYSQL_USER: api
+  MYSQL_PASSWORD: foobarfoo
+kind: Secret
+metadata:
+  name: db-secrets
+type: Opaque
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "phpmyadmin"
+  labels:
+    app: "phpmyadmin"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "phpmyadmin"
+  template:
+    metadata:
+      labels:
+        app: "phpmyadmin"
+    spec:
+      containers:
+      - name: "phpmyadmin"
+        image: "phpmyadmin/phpmyadmin:4.8"
+        env:
+        - name: PMA_HOST
+          value: mysql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "phpmyadmin"
+spec:
+  selector:
+    app: "phpmyadmin"
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "api"
+  labels:
+    app: "api"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "api"
+  template:
+    metadata:
+      labels:
+        app: "api"
+    spec:
+      initContainers:
+      - name: init-myservice
+        image: busybox
+        command: ['sh', '-c', 'until nslookup mysql; do echo waiting for mysql; sleep 2; done;']
+      containers:
+      - name: "api"
+        image: "git.thecodingmachine.com:444/tcm-projects/club-airways/api:#ENVIRONMENT#"
+        imagePullPolicy: Always
+        envFrom:
+        - secretRef:
+            name: api-secrets
+            optional: false
+        env:
+        - name: APACHE_DOCUMENT_ROOT
+          value: "public"
+        - name: STARTUP_COMMAND_1
+          value: "php artisan migrate --force"
+        - name: DB_HOST
+          value: "mysql"
+        - name: DB_DATABASE
+          value: "api"
+        - name: DB_USERNAME
+          value: "api"
+        - name: APP_URL
+          value: "http://api.#ENVIRONMENT#.ca.test.thecodingmachine.com"
+        - name: URL_PREFIX
+          value: "http://"
+        - name: FRONT_URL
+          value: "#ENVIRONMENT#.ca.test.thecodingmachine.com"
+        - name: APP_NAME
+          value: "ClubAirways"
+        - name: APP_KEY
+          value: "base64:tz1QvaEt/H44oKjnJ/2GhJcaZclqZLpQvCjru+BufqI="
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: YOUSIGN_API_KEY
+          value: "4aa491cda45d54a6d98ca133ca482423"
+        - name: YOUSIGN_URL
+          value: "https://staging-app.yousign.com"
+        - name: YOUSIGN_URL_API
+          value: "https://staging-api.yousign.com"
+        - name: YOUSIGN_SIGNATURE_UI
+          value: "/signature_uis/2528626e-b301-4284-87db-6248d711ea47"
+        volumeMounts:
+          - mountPath: /var/www/html/storage/app/public
+            name: api-data
+      - name: "worker"
+        image: "git.thecodingmachine.com:444/tcm-projects/club-airways/api:#ENVIRONMENT#"
+        imagePullPolicy: Always
+        envFrom:
+        - secretRef:
+            name: api-secrets
+            optional: false
+        env:
+        - name: APACHE_DOCUMENT_ROOT
+          value: "public"
+        - name: DB_HOST
+          value: "mysql"
+        - name: DB_DATABASE
+          value: "api"
+        - name: DB_USERNAME
+          value: "api"
+        - name: APP_URL
+          value: "http://api.#ENVIRONMENT#.ca.test.thecodingmachine.com"
+        - name: URL_PREFIX
+          value: "http://"
+        - name: FRONT_URL
+          value: "#ENVIRONMENT#.ca.test.thecodingmachine.com"
+        - name: APP_NAME
+          value: "ClubAirways"
+        - name: APP_KEY
+          value: "base64:tz1QvaEt/H44oKjnJ/2GhJcaZclqZLpQvCjru+BufqI="
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_HOST
+          value: "redis"
+        args:
+          - "php"
+          - "artisan"
+          - "queue:listen"
+      imagePullSecrets:
+      - name: "tcmregistry"
+      volumes:
+        - name: api-data
+          persistentVolumeClaim:
+            claimName: api-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "api"
+spec:
+  selector:
+    app: "api"
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+apiVersion: v1
+stringData:
+  DB_PASSWORD: "foobarfoo"
+  NEXMO_KEY: "81030870"
+  NEXMO_SECRET: "pZJau2pNDdJwHGPS"
+kind: Secret
+metadata:
+  name: api-secrets
+type: Opaque
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "bo"
+  labels:
+    app: "bo"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "bo"
+  template:
+    metadata:
+      labels:
+        app: "bo"
+    spec:
+      containers:
+      - name: "bo"
+        image: "git.thecodingmachine.com:444/tcm-projects/club-airways/bo:#ENVIRONMENT#"
+        imagePullPolicy: Always
+      imagePullSecrets:
+      - name: "tcmregistry"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "bo"
+spec:
+  selector:
+    app: "bo"
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "echo"
+  labels:
+    app: "echo"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "echo"
+  template:
+    metadata:
+      labels:
+        app: "echo"
+    spec:
+      containers:
+        - name: "echo"
+          image: "git.thecodingmachine.com:444/tcm-projects/club-airways/echo:#ENVIRONMENT#"
+          imagePullPolicy: Always
+      imagePullSecrets:
+        - name: "tcmregistry"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "echo"
+spec:
+  selector:
+    app: "echo"
+  ports:
+    - name: http
+      port: 80
+      targetPort: 6001
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  finalizers:
+    - kubernetes.io/pvc-protection
+  name: mysql-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  finalizers:
+    - kubernetes.io/pvc-protection
+  name: redis-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  finalizers:
+    - kubernetes.io/pvc-protection
+  name: api-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+

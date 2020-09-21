@@ -1,0 +1,248 @@
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+  - cleanup
+
+lint_bo:
+  stage: lint
+  image: thecodingmachine/nodejs:10
+  cache:
+    paths:
+      - node_modules
+  before_script:
+    - cd bo && yarn
+  script:
+    - yarn lint
+
+lint_api:
+  stage: lint
+  image: thecodingmachine/php:7.3-v2-cli
+  cache:
+    paths:
+    - api/vendor
+    - $HOME/.composer
+  before_script:
+  - cd api && sh ci/install.sh
+  script:
+  - composer cs-check
+  - composer phpstan -- --memory-limit=1024M
+  variables:
+    PHP_INI_MEMORY_LIMIT: 1g
+
+lint_app:
+  stage: lint
+  image: thecodingmachine/nodejs:10
+  cache:
+    paths:
+      - node_modules
+  before_script:
+    - cd app && yarn
+  script:
+    - yarn lint-check
+    - yarn prettier-check
+
+test_api:
+  stage: test
+  image: thecodingmachine/php:7.3-v2-cli
+  cache:
+    paths:
+    - api/vendor
+    - $HOME/.composer
+  services:
+  - mysql:5.7
+  variables:
+    PHP_EXTENSION_XDEBUG: 1
+    MYSQL_DATABASE: api
+    MYSQL_ROOT_PASSWORD: secret
+    MYSQL_USER: api
+    MYSQL_PASSWORD: secret
+    DB_HOST: mysql
+    DB_DATABASE: api
+    DB_USERNAME: api
+    DB_PASSWORD: secret
+    APP_ENV: testing
+  before_script:
+  - cd api && sh ci/install-test.sh
+  script:
+  - composer tests
+  after_script:
+  - /home/docker/washingmachine/washingmachine run -v --clover=api/clover.xml
+  artifacts:
+    when: always
+    expire_in: 1 month
+    paths:
+    - api/coverage
+    - api/clover.xml
+
+.build-image:
+  stage: build
+  image: docker:git
+  services:
+  - docker:dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    IMAGE_NAME: foo
+    DIR_PATH: foo
+    DOCKER_FILENAME: Dockerfile
+  script:
+  - cd ${DIR_PATH}
+  - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN git.thecodingmachine.com:444
+  - docker build -t git.thecodingmachine.com:444/tcm-projects/club-airways/${IMAGE_NAME}:${CI_COMMIT_REF_SLUG} -f ${DOCKER_FILENAME} .
+  - docker push git.thecodingmachine.com:444/tcm-projects/club-airways/${IMAGE_NAME}:${CI_COMMIT_REF_SLUG}
+
+build_api:
+  extends: .build-image
+  variables:
+    IMAGE_NAME: api
+    DIR_PATH: api
+  only:
+  - branches
+  except:
+  - master
+  - develop
+
+build_echo:
+  extends: .build-image
+  variables:
+    IMAGE_NAME: echo
+    DIR_PATH: api
+    DOCKER_FILENAME: echo.Dockerfile
+  only:
+  - branches
+  except:
+  - master
+  - develop
+
+build_bo:
+  extends: .build-image
+  variables:
+    IMAGE_NAME: bo
+    DIR_PATH: bo
+    API_URL: "https://api.$CI_COMMIT_REF_SLUG.ca.test.thecodingmachine.com/admin"
+    ECHO_URL: "https://echo.$CI_COMMIT_REF_SLUG.ca.test.thecodingmachine.com"
+  before_script:
+  - sed -i "s@#API_URL#@${API_URL}@g" bo/Dockerfile
+  - sed -i "s@#ECHO_URL#@${ECHO_URL}@g" bo/Dockerfile
+  only:
+  - branches
+  except:
+  - master
+  - develop
+
+deploy_branches:
+  image: lwolf/kubectl_deployer:latest
+  stage: deploy
+  variables:
+    KUBECONFIG: /root/.kube/config
+  before_script:
+  - apk update && apk add curl
+  - mkdir ~/.kube
+  - echo "$KUBE_CONFIG" > ~/.kube/config
+  - kubectl create namespace ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete all --all
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete pvc mysql-data || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete pvc redis-data || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete pvc api-data || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete secret tcmregistry || true
+  - cd kubernetes
+  script:
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} create secret docker-registry tcmregistry --docker-username=ci.gitlab@thecodingmachine.com --docker-password=$CI_PASSWD --docker-server=git.thecodingmachine.com:444 --docker-email=ci.gitlab@thecodingmachine.com
+  - sed -i "s/#ENVIRONMENT#/${CI_COMMIT_REF_SLUG}/g" config.yaml
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} apply -f .
+  - curl "https://bigbro.thecodingmachine.com/gitlab/call/start-environment?projectId=${CI_PROJECT_ID}&commitSha=${CI_COMMIT_SHA}&ref=${CI_COMMIT_REF_NAME}&name=${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}"
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: https://bigbro.thecodingmachine.com/environment/${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}
+    on_stop: cleanup_branches
+  when: manual
+  only:
+  - branches
+  except:
+  - master
+  - staging
+  - develop
+
+deploy_staging:
+  image: lwolf/kubectl_deployer:latest
+  stage: deploy
+  variables:
+    KUBECONFIG: /root/.kube/config
+  before_script:
+    - apk update && apk add curl
+    - mkdir ~/.kube
+    - echo "$KUBE_CONFIG" > ~/.kube/config
+    - kubectl create namespace ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} || true
+    - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete all --all
+    - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete secret tcmregistry || true
+    - cd kubernetes
+  script:
+    - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} create secret docker-registry tcmregistry --docker-username=ci.gitlab@thecodingmachine.com --docker-password=$CI_PASSWD --docker-server=git.thecodingmachine.com:444 --docker-email=ci.gitlab@thecodingmachine.com
+    - sed -i "s/#ENVIRONMENT#/${CI_COMMIT_REF_SLUG}/g" config.yaml
+    - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} apply -f .
+    - curl "https://bigbro.thecodingmachine.com/gitlab/call/start-environment?projectId=${CI_PROJECT_ID}&commitSha=${CI_COMMIT_SHA}&ref=${CI_COMMIT_REF_NAME}&name=${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}"
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: https://bigbro.thecodingmachine.com/environment/${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}
+    on_stop: cleanup_staging
+  when: manual
+  only:
+    - staging
+
+cleanup_branches:
+  stage: cleanup
+  image: thecodingmachine/gitlab-registry-cleaner:latest
+  variables:
+    KUBECONFIG: /root/.kube/config
+    GIT_STRATEGY: none
+  before_script:
+  - apk update && apk add curl
+  - mkdir ~/.kube
+  - echo "$KUBE_CONFIG" > ~/.kube/config
+  script:
+  - /delete_image.sh git.thecodingmachine.com:444/tcm-projects/club-airways/api:${CI_COMMIT_REF_SLUG}
+  - /delete_image.sh git.thecodingmachine.com:444/tcm-projects/club-airways/bo:${CI_COMMIT_REF_SLUG}
+  - /delete_image.sh git.thecodingmachine.com:444/tcm-projects/club-airways/fo:${CI_COMMIT_REF_SLUG}
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete all --all
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete pvc mysql-data || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete secret tcmregistry || true
+  - kubectl delete namespace ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}
+  - curl "https://bigbro.thecodingmachine.com/gitlab/call/stop-environment?projectId=${CI_PROJECT_ID}&commitSha=${CI_COMMIT_SHA}&name=${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}"
+  when: manual
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  only:
+  - branches
+  except:
+  - master
+  - staging
+  - develop
+
+cleanup_staging:
+  stage: cleanup
+  image: thecodingmachine/gitlab-registry-cleaner:latest
+  variables:
+    KUBECONFIG: /root/.kube/config
+    GIT_STRATEGY: none
+  before_script:
+  - apk update && apk add curl
+  - mkdir ~/.kube
+  - echo "$KUBE_CONFIG" > ~/.kube/config
+  script:
+  - /delete_image.sh git.thecodingmachine.com:444/tcm-projects/club-airways/api:${CI_COMMIT_REF_SLUG}
+  - /delete_image.sh git.thecodingmachine.com:444/tcm-projects/club-airways/bo:${CI_COMMIT_REF_SLUG}
+  - /delete_image.sh git.thecodingmachine.com:444/tcm-projects/club-airways/fo:${CI_COMMIT_REF_SLUG}
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete all --all
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete pvc mysql-data || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete pvc api-data || true
+  - kubectl -n ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG} delete secret tcmregistry || true
+  - kubectl delete namespace ${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}
+  - curl "https://bigbro.thecodingmachine.com/gitlab/call/stop-environment?projectId=${CI_PROJECT_ID}&commitSha=${CI_COMMIT_SHA}&name=${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}"
+  when: manual
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  only:
+  - staging

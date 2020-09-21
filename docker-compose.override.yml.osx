@@ -1,0 +1,35 @@
+version: '3'
+
+services:
+  api:
+    volumes:
+      - ./api:/var/www/html:delegated
+
+  api_database:
+    volumes:
+      - ./docker/volumes/mysql:/var/lib/mysql:delegated
+
+  bo:
+    volumes:
+      - ./bo:/usr/app/:delegated
+
+  worker:
+    volumes:
+      - ./api:/var/www/html:delegated
+
+  echo:
+    volumes:
+      - ./api:/usr/src/app:delegated
+
+  redis:
+    volumes:
+      - ./docker/redis/data:/data:delegated
+
+  phpmyadmin:
+    volumes:
+      - ./docker/pma.php.ini:/usr/local/etc/php/conf.d/phpmyadmin-misc.ini:delegated
+
+  traefik:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro,delegated
+      - ./docker/traefik.toml:/traefik.toml:ro,delegated

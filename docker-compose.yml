@@ -1,0 +1,148 @@
+version: '3'
+
+services:
+  # API CONTAINER
+  api:
+    image: thecodingmachine/php:7.3-v2-apache
+    networks:
+      - web
+    depends_on:
+      - api_database
+      - redis
+    volumes:
+      - ./api:/var/www/html
+    environment:
+      PHP_EXTENSION_XDEBUG: 1
+      APP_ENV: ${ENV}
+      APACHE_DOCUMENT_ROOT: public
+      STARTUP_COMMAND_1: composer install
+      STARTUP_COMMAND_2: php artisan migrate
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      FRONT_URL: bo.${DOMAIN}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_HOST: redis
+    labels:
+    - traefik.backend=api
+    - traefik.frontend.rule=Host:api.${DOMAIN},${MY_IP_ADDRESS}
+
+  # MYSQL CONTAINER FOR API
+  api_database:
+    image: mysql:5.7
+    volumes:
+    - ./docker/volumes/mysql:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    labels:
+      - traefik.enable=false
+    ports:
+      - 3306:3306
+    networks:
+      - web
+
+  # BACK OFFICE CONTAINER
+  bo:
+    image: node:11.12
+    networks:
+      - web
+    ports:
+      - 8080
+    depends_on:
+      - api
+    volumes:
+      - ./bo:/usr/app/
+    environment:
+      CHOKIDAR_USEPOLLING: 1
+      NODE_ENV: ${ENV}
+      VUE_APP_API_URL: http://api.${DOMAIN}/admin
+      VUE_APP_ECHO_URL: http://echo.${DOMAIN}
+    command: bash -c "cd /usr/app && yarn && yarn run serve"
+    labels:
+      - traefik.backend=bo
+      - traefik.frontend.rule=Host:bo.${DOMAIN}
+
+  worker:
+    image: thecodingmachine/php:7.3-v2-apache-node10
+    volumes:
+      - ./api:/var/www/html
+    command: 'php artisan queue:listen'
+    # Docker will restart the container if the worker crashes for any reason
+    # See https://docs.docker.com/config/containers/start-containers-automatically/#restart-policy-details
+    restart: unless-stopped
+    networks:
+      - web
+    depends_on:
+      - api_database
+    labels:
+      - 'traefik.enable=false'
+
+  # LARAVEL ECHO SERVER FOR CHAT
+  echo:
+    build: ./docker/echo
+    labels:
+      - traefik.enable=true
+      - traefik.frontend.rule=Host:echo.${DOMAIN},${MY_IP_ADDRESS}.xip.io
+      - traefik.port=${ECHO_PORT}
+    working_dir: '/usr/src/app'
+    volumes:
+      - ./api:/usr/src/app
+    networks:
+      - web
+    expose:
+      - ${ECHO_PORT}
+
+  # REDIS FOR CHAT
+  redis:
+    image: redis:4.0.5-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    hostname: redis
+    sysctls:
+      net.core.somaxconn: 512
+    networks:
+      - web
+    volumes:
+      - ./docker/redis/data:/data
+    labels:
+      - 'traefik.enable=false'
+
+  # PMA
+  phpmyadmin:
+    image: 'phpmyadmin/phpmyadmin:latest'
+    networks:
+      - web
+    labels:
+      - traefik.backend=phpmyadmin
+      - traefik.frontend.rule=Host:pma.${DOMAIN}
+      - traefik.port=80
+    environment:
+      PMA_HOST: api_database
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./docker/pma.php.ini:/usr/local/etc/php/conf.d/phpmyadmin-misc.ini
+
+  # TRAEFIK REVERSE PROXY FOR API AND BO
+  traefik:
+    image: traefik:1.7
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/traefik.toml:/traefik.toml:ro
+    labels:
+      - traefik.port=8080
+      - traefik.backend=traefik
+      - traefik.frontend.rule=Host:traefik.${DOMAIN}
+    command: --docker #--logLevel=DEBUG
+    networks:
+      - web
+    ports:
+      - 80:80
+      - 443:443
+
+networks:
+  web:
+    driver: bridge

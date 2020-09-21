@@ -1,0 +1,18 @@
+parameters:
+    level: max
+    paths:
+        - 'app'
+        - 'config'
+    ignoreErrors:
+        # Add errors to ignore here
+        # Only ignore errors that are real false positives :)
+        - '#Access to private property (.*) of parent class Illuminate\\Foundation\\Auth\\User#'
+        - '#Parameter \#1 \$user of static method Illuminate\\Auth\\SessionGuard::login(.*)App\\Models\\User(.*) given#'
+        - '#Cannot access property $.* on App\Models\User|null.#'
+        - '#Cannot call method .* on App\Models\User|null.#'
+        - '#Call to an undefined method Illuminate\\Database\\Eloquent\\Model::ownedBy\(\)#'
+        - '#Call to an undefined method App\\Http\\Resources(.*)#'
+        - '#Call to an undefined method Illuminate\\Database\\Eloquent\\Relations\\BelongsToMany::withTrashed\(\)\.#'
+        - '#Call to an undefined method Illuminate\\Database\\Eloquent\\Relations\\BelongsTo::withTrashed\(\)\.#'
+includes:
+  - vendor/nunomaduro/larastan/extension.neon

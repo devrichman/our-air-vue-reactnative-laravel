@@ -1,0 +1,8 @@
+export { ServiceService } from './ServiceService'
+export { UserService } from './UserService'
+export { LocaleService } from './LocaleService'
+export { SettingsService } from './SettingsService'
+export { OptionService } from './OptionService'
+export { BookingService } from './BookingService'
+export { ChatService } from './ChatService'
+export { GenderService } from './GenderService'

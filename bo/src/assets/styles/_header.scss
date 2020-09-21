@@ -1,0 +1,10 @@
+.el-header {
+  background-color: $color-main;
+  border-bottom: thin solid $color-grey;
+  height: $header-height !important;
+  padding: 18px 40px;
+
+  h1 {
+    color: $color-white;
+  }
+}

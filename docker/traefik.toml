@@ -1,0 +1,16 @@
+defaultEntryPoints = ["http"]
+
+[entryPoints]
+  [entryPoints.http]
+  address = ":80"
+
+[retry]
+
+[docker]
+endpoint = "unix:///var/run/docker.sock"
+domain = "club-airways.localhost"
+watch = true
+exposedbydefault = false
+
+[web]  # Port for the status page
+address = ":8080"
